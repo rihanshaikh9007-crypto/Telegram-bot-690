@@ -13,8 +13,9 @@ import threading
 TOKEN = '8579040508:AAH10pdTGv8OARL0ECXsT5xgxtJpZT-pdww'
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
-# Aapki Admin ID
+# Aapki Admin ID aur Approval Channel
 ADMIN_ID = 1484173564
+APPROVAL_CHANNEL = "@ValiModes_key" # Yahan approval requests aayengi
 
 # ================= DATABASE SETUP =================
 conn = sqlite3.connect('webseries_bot.db', check_same_thread=False)
@@ -55,12 +56,46 @@ def home(): return "Bot is running perfectly on Render!"
 def run_web(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 
+# ================= 💰 ADMIN ADD COINS COMMAND =================
+@bot.message_handler(commands=['addcoins'])
+def add_coins(message):
+    if message.chat.id != ADMIN_ID: return
+    try:
+        parts = message.text.split()
+        if len(parts) != 3:
+            bot.reply_to(message, "❌ <b>Galat Format!</b>\nAise likho: <code>/addcoins USER_ID COINS</code>\nExample: <code>/addcoins 123456789 20</code>")
+            return
+            
+        target_user = int(parts[1])
+        amount = int(parts[2])
+        
+        # Check agar user database me hai
+        c.execute("SELECT * FROM users WHERE user_id=?", (target_user,))
+        if not c.fetchone():
+            bot.reply_to(message, "❌ User database mein nahi mila! Sayad usne bot start nahi kiya hai.")
+            return
+            
+        # Add coins to user
+        c.execute("UPDATE users SET coins = coins + ? WHERE user_id=?", (amount, target_user))
+        conn.commit()
+        
+        bot.reply_to(message, f"✅ <b>Success!</b>\nUser <code>{target_user}</code> ke account mein <b>{amount} Coins</b> add kar diye gaye hain.")
+        
+        # User ko notification bhejna
+        try:
+            bot.send_message(target_user, f"🎁 <b>Surprise!</b>\nAdmin ne aapke account mein <b>{amount} Coins</b> bheje hain! Apne account me check karein.")
+        except:
+            pass # Agar user ne bot block kar diya ho toh error nahi aayega
+            
+    except ValueError:
+        bot.reply_to(message, "❌ User ID aur Coins sirf numbers hone chahiye!")
+
+
 # ================= 🔗 LINK CHANGER COMMAND =================
 @bot.message_handler(commands=['change'])
 def change_link(message):
     if message.chat.id != ADMIN_ID: return
     try:
-        # User jo naya link dega use save karna
         new_link = message.text.replace('/change', '').strip()
         if new_link == "":
             bot.reply_to(message, "❌ Link khali nahi ho sakta!")
@@ -215,7 +250,6 @@ def check_user_status(user_id):
 
 def send_force_sub(chat_id, user_id):
     if check_user_status(user_id):
-        # 🟢 FIX 1: Verification ho chuki hai, seedha Menu khulega (Key nahi jayegi)
         send_main_menu(chat_id)
         return
         
@@ -237,14 +271,13 @@ def verify_callback(call):
         ref = c.fetchone()
         if ref:
             referrer_id = ref[0]
-            c.execute("UPDATE users SET coins = coins + 5 WHERE user_id=?", (referrer_id,))
+            c.execute("UPDATE users SET coins = coins + 2 WHERE user_id=?", (referrer_id,))
             c.execute("DELETE FROM pending_refs WHERE user_id=?", (uid,))
             c.execute("INSERT INTO completed_refs (user_id, referrer_id) VALUES (?, ?)", (uid, referrer_id))
             conn.commit()
-            try: bot.send_message(referrer_id, "🎉 <b>Congrats!</b>\nA referral verified successfully. <b>+5 Coins</b> Added!")
+            try: bot.send_message(referrer_id, "🎉 <b>Congrats!</b>\nA referral verified successfully. <b>+2 Coins</b> Added!")
             except: pass
             
-        # 🟢 FIX 1: Join/Verify ke baad seedha Menu!
         send_main_menu(call.message.chat.id)
     else:
         bot.answer_callback_query(call.id, "❌ Aapne abhi tak channels me Join Request nahi bheji hai!", show_alert=True)
@@ -273,15 +306,40 @@ def text_commands(message):
         
     elif text == "🔗 Refer & Earn":
         bot_usr = bot.get_me().username
-        bot.send_message(uid, f"📢 <b>REFER & EARN</b>\n\nInvite friends & get <b>5 Coins</b>!\n\n🔗 Your Link:\nhttps://t.me/{bot_usr}?start={uid}\n\n<i>*Coins are given ONLY when your friend verifies channel joins.</i>")
+        bot.send_message(uid, f"📢 <b>REFER & EARN</b>\n\nInvite friends & get <b>2 Coins</b>!\n\n🔗 Your Link:\nhttps://t.me/{bot_usr}?start={uid}\n\n<i>*Coins are given ONLY when your friend verifies channel joins.</i>")
         
     elif text == "🎁 Get Key (15 Coins)":
-        # 🟢 FIX 2: Key ke liye 15 Coins check karega
         if coins >= 15:
-            # 15 coins cut kar lo
+            # 15 coins deduct karo aur approval request bhejo
             c.execute("UPDATE users SET coins = coins - 15 WHERE user_id=?", (uid,))
             conn.commit()
-            send_dynamic_key(uid) # Key bhej dega
+            
+            req_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            username = message.from_user.username
+            user_mention = f"@{username}" if username else f"User ID: {uid}"
+
+            req_text = (
+                f"🆕 <b>New Key Request</b>\n\n"
+                f"👤 <b>User:</b> {user_mention}\n"
+                f"🆔 <b>ID:</b> <code>{uid}</code>\n"
+                f"⏰ <b>Time:</b> {req_time}"
+            )
+
+            markup = InlineKeyboardMarkup()
+            markup.add(
+                InlineKeyboardButton("✅ APPROVAL", callback_data=f"approve_{uid}"),
+                InlineKeyboardButton("❌ REJECTED", callback_data=f"reject_{uid}")
+            )
+
+            try:
+                bot.send_message(APPROVAL_CHANNEL, req_text, reply_markup=markup)
+                bot.send_message(uid, "⏳ <b>Request Sent!</b>\nAapki request admin channel me bhej di gayi hai. Approval milte hi aapko key mil jayegi.")
+            except Exception as e:
+                # Agar channel me message nahi gaya, toh coins wapas kar do
+                c.execute("UPDATE users SET coins = coins + 15 WHERE user_id=?", (uid,))
+                conn.commit()
+                bot.send_message(uid, f"❌ Error: Admin ne abhi tak bot ko {APPROVAL_CHANNEL} me admin nahi banaya hai. (Coins refunded)")
+
         else:
             bot.send_message(uid, f"❌ <b>Coins Kam Hain!</b>\n\nKey lene ke liye <b>15 Coins</b> chahiye.\nAapke paas abhi sirf <b>{coins} Coins</b> hain. Doston ko refer karo!")
 
@@ -302,15 +360,47 @@ def process_vip_key(message):
         bot.send_message(uid, "❌ <b>Invalid or Used Key!</b>")
 
 
+# ================= APPROVE / REJECT LOGIC =================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("approve_") or call.data.startswith("reject_"))
+def handle_approval(call):
+    # Sirf ADMIN hi in buttons pe click kar sakta hai
+    if call.fromuser.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "❌ Only Admin can do this!", show_alert=True)
+        return
+
+    action, uid_str = call.data.split("_")
+    uid = int(uid_str)
+
+    if action == "approve":
+        bot.edit_message_text(f"{call.message.text}\n\n✅ <b>STATUS: APPROVED</b>", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        send_dynamic_key(uid)
+        
+        try:
+            bot.send_message(uid, "🎉 <b>Congratulations!</b>\nAapki request Admin ne Approve kar di hai. Upar aapki key aur link mil jayega 👆")
+        except:
+            pass
+
+    elif action == "reject":
+        bot.edit_message_text(f"{call.message.text}\n\n❌ <b>STATUS: REJECTED</b>", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        
+        # User ke 15 coins usko wapas de do
+        c.execute("UPDATE users SET coins = coins + 15 WHERE user_id=?", (uid,))
+        conn.commit()
+        
+        try:
+            bot.send_message(uid, "❌ <b>Request Rejected!</b>\nAdmin ne aapki request reject kar di hai. Aapke 15 coins wapas account me daal diye gaye hain.")
+        except:
+            pass
+
+
 # ================= DYNAMIC KEY GENERATOR =================
 def send_dynamic_key(chat_id):
     key = f"{random.randint(1000000000, 9999999999)}"
     
-    # 🟢 FIX 3: Database se naya link fetch karega jo /change se dala gaya tha
+    # Database se naya link fetch karega jo /change se dala gaya tha
     c.execute("SELECT value FROM settings WHERE name='key_link'")
     dynamic_link = c.fetchone()[0]
     
-    # Text same rakha hai jaise tumhe chahiye tha
     text = (
         f"Key - <code>{key}</code>\n\n"
         f"<a href='https://t.me/+MkNcxGuk-w43MzBl'>DRIP SCINET APK - {dynamic_link}</a>"
